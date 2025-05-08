@@ -7,7 +7,7 @@ from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 import numpy as np
 
-from typing import Any
+from typing import Any, Optional
 
 from QHyper.problems.base import Problem
 from QHyper.optimizers import OptimizationResult
@@ -20,6 +20,10 @@ class SolverConfigException(Exception):
 class SolverException(Exception):
     pass
 
+@dataclass
+class SamplesetInfo:
+    dwave_sampleset_info: np.ndarray
+    time_measurements: np.ndarray
 
 @dataclass
 class SolverResult:
@@ -40,7 +44,9 @@ class SolverResult:
     """
     probabilities: np.recarray
     params: dict[Any, Any]
+    sampleset_info: Optional[SamplesetInfo] = None
     history: list[list[OptimizationResult]] = field(default_factory=list)
+    # sampleset_info: dict[str, Any] = field(default_factory=dict)
 
 
 class Solver(ABC):

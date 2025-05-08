@@ -1,12 +1,12 @@
 import os
-from typing import Any
+from typing import Any, Callable, Dict
 import numpy as np
 import numpy.typing as npt
 from dataclasses import dataclass
 from collections import defaultdict
 
 from QHyper.problems.base import Problem
-from QHyper.solvers.base import Solver, SolverResult
+from QHyper.solvers.base import Solver, SolverResult, SamplesetInfo
 from QHyper.converter import Converter
 from QHyper.constraint import Polynomial
 
@@ -15,9 +15,11 @@ from dwave.system.composites import FixedEmbeddingComposite
 from dimod import BinaryQuadraticModel
 from dwave.embedding.pegasus import find_clique_embedding
 
+from functools import wraps
+import time
+
 
 DWAVE_API_TOKEN = os.environ.get('DWAVE_API_TOKEN')
-
 
 @dataclass
 class Advantage(Solver):
@@ -72,17 +74,22 @@ class Advantage(Solver):
             solver=self.version, region=self.region,
             token=token or DWAVE_API_TOKEN)
         self.token = token
+        self.times = {}
 
         if use_clique_embedding:
-            args = self.weigths if self.weigths else []
+            # args = self.weigths if aself.weigths else []
+            args = getattr(self, "weights", [])
             qubo = Converter.create_qubo(self.problem, args)
             qubo_terms, offset = convert_qubo_keys(qubo)
             bqm = BinaryQuadraticModel.from_qubo(qubo_terms, offset=offset)
 
+            start_time = time.perf_counter()
             self.embedding = find_clique_embedding(
                 bqm.to_networkx_graph(),
                 target_graph=self.sampler.to_networkx_graph()
             )
+            end_time = time.perf_counter()
+            self.times["find_clique_embedding_time"] = end_time - start_time
 
     def solve(self, penalty_weights: list[float] | None = None) -> Any:
         if penalty_weights is None and self.penalty_weights is None:
@@ -98,9 +105,17 @@ class Advantage(Solver):
         qubo = Converter.create_qubo(self.problem, penalty_weights)
         qubo_terms, offset = convert_qubo_keys(qubo)
         bqm = BinaryQuadraticModel.from_qubo(qubo_terms, offset=offset)
+
+        # Additional sampling info
+        return_embedding = True
+
+        start_time = time.perf_counter()
         sampleset = embedding_compose.sample(
-            bqm, num_reads=self.num_reads, chain_strength=self.chain_strength
+            bqm, num_reads=self.num_reads, chain_strength=self.chain_strength, return_embedding=return_embedding
         )
+        end_time = time.perf_counter()
+        times = {"sample_function_time": end_time - start_time}
+        sampleset_times = {**self.times, **times}
 
         result = np.recarray(
             (len(sampleset),),
@@ -118,7 +133,17 @@ class Advantage(Solver):
                 solution.num_occurrences / num_of_shots)
             result['energy'][i] = solution.energy
 
-        return SolverResult(result, {"penalty_weights": penalty_weights}, [])
+        res_dict = {**sampleset.info, **sampleset_times}
+        print(res_dict)
+        # id_dict = {"problem_id": sampleset.info["problem_id"]}
+        print({**sampleset.info["timing"], **sampleset_times})
+        # sampleset_info = time_dict_to_ndarray({**sampleset.info["timing"], **sampleset_times})
+        sampleset_info = SamplesetInfo(time_dict_to_ndarray(sampleset.info["timing"]), 
+                                       time_dict_to_ndarray(sampleset_times))
+        print(f"Sampleset info: {sampleset_info}")
+
+        # return SolverResult(result, {"penalty_weights": penalty_weights}, [], sampleset_info)
+        return SolverResult(result, {"penalty_weights": penalty_weights}, sampleset_info, [])
 
     def prepare_solver_result(self, result: defaultdict, arguments: npt.NDArray) -> SolverResult:
         sorted_keys = sorted(result.keys(), key=lambda x: int(''.join(filter(str.isdigit, x))))
@@ -127,6 +152,15 @@ class Advantage(Solver):
         parameters = {values: arguments}
 
         return SolverResult(probabilities, parameters)
+
+
+def time_dict_to_ndarray(sampleset_info_times: dict[str, float]) -> np.ndarray:
+    dtype = [(key, float) for key in sampleset_info_times]
+    result = np.recarray((), dtype=dtype)
+    for key, value in sampleset_info_times.items():
+        setattr(result, key, value)
+
+    return result
 
 
 def convert_qubo_keys(qubo: Polynomial) -> tuple[dict[tuple, float], float]:
