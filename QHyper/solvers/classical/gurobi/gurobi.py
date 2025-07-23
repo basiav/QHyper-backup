@@ -65,18 +65,25 @@ class Gurobi(Solver):  # todo works only for quadratic expressions
 
         gpm.setParam('Threads', self.threads)
 
-        all_vars = self.problem.objective_function.get_variables()
+        # all_vars = self.problem.objective_function.get_variables()
+        all_vars = set(self.problem.variables)
         for con in self.problem.constraints:
             all_vars |= con.get_variables()
 
+        print(f"Gurobi.all_vars: {all_vars}")
         vars = {
             str(var_name): gpm.addVar(vtype=gp.GRB.BINARY, name=str(var_name))
             for var_name in all_vars
         }
+        print(f"Gurobi.vars: {vars}")
 
         objective_function = polynomial_to_gurobi(
             vars, self.problem.objective_function
         )
+        print(f"Gurobi.polynomial_to_gurobi: {objective_function}")
+        # if self.problem.objective_function.is_zero():
+
+
         gpm.setObjective(objective_function, gp.GRB.MINIMIZE)
 
         for i, constraint in enumerate(self.problem.constraints):
@@ -92,10 +99,35 @@ class Gurobi(Solver):  # todo works only for quadratic expressions
             gpm.update()
         gpm.optimize()
 
+        status_map = {
+            gp.GRB.OPTIMAL: "OPTIMAL",
+            gp.GRB.INFEASIBLE: "INFEASIBLE",
+            gp.GRB.INF_OR_UNBD: "INFEASIBLE_OR_UNBOUNDED",
+            gp.GRB.UNBOUNDED: "UNBOUNDED",
+            gp.GRB.CUTOFF: "CUTOFF",
+            gp.GRB.ITERATION_LIMIT: "ITERATION_LIMIT",
+            gp.GRB.NODE_LIMIT: "NODE_LIMIT",
+            gp.GRB.TIME_LIMIT: "TIME_LIMIT",
+            # Add more if needed
+        }
+
+        print(f"Status code: {gpm.Status}")
+        print(f"Status name: {status_map.get(gpm.Status, 'UNKNOWN')}")
+
+
+        print(f"status: {gpm.Status}")
+
         allvars = gpm.getVars()
+        print(f"Gurobi.allvars: {allvars}")
+
+        solution = gpm.getAttr('X', vars)
+        print(f"Gurobi.solution: {solution}")
         solution = {}
         for v in allvars:
-            solution[v.VarName] = v.X
+            try:
+                solution[v.VarName] = v.X
+            except Exception as e:
+                print(e)
 
         recarray = np.recarray(
             (1, ), dtype=[(var, 'i4') for var in vars]+[('probability', 'f8')])
